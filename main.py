@@ -102,12 +102,12 @@ if __name__ == "__main__":
     svm = SVMWithSGD.train(trainingrdd)
 
     # Run predictions
-    predictedFailures = svm.predict(testfailedrdd).count()
+    predictedFailures = svm.predict(testfailedrdd).reduce(lambda a, b: a+b)
     actualFailures = testfailedrdd.count()
     predictionRate = predictedFailures*100.0/actualFailures
     testfailedrdd.unpersist()
 
-    predictedFailures = svm.predict(testgoodrdd).count()
+    predictedFailures = svm.predict(testgoodrdd).filter(lambda x: x==0).count()
     falseAlarmRate = predictedFailures*100.0/testgoodrdd.count()
     testgoodrdd.unpersist()
 
