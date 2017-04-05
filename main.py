@@ -16,23 +16,25 @@ def sampleK(itemList, k):
                 sampleList[token] = item
     return sampleList
 
-# Options to be passed to SVM for training
-svm_options = '-s 0 -t 2 -c 10'
-
 # rddEntry format: (key, [[[training_labels], [training_data]], [[expected_labels], [test_data]]])
 # Output format: (numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords)
 def getPredictionStats(rddEntry):
+    if len(rddEntry[1])<2:
+        return (0, 0, 0, 0)
+
+    # Options to be passed to SVM for training
+    svm_options = '-s 0 -t 2 -c 10'
     model = svm_train(rddEntry[1][0][0], rddEntry[1][0][1], svm_options)
     labels, acc, values = svm_predict(rddEntry[1][1][0], rddEntry[1][1][1], model)
     numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords = 0, 0, 0, 0
     for idx, prediction in enumerate(labels):
         if rddEntry[1][1][0][idx]==1:
             expectedFailedPredictions+=1
-            if labels[idx]==rddEntry[1][1][0][idx]:
+            if prediction==rddEntry[1][1][0][idx]:
                 numFailedPredictions+=1
         else:
             numGoodRecords+=1
-            if labels[idx]!=rddEntry[1][1][0][idx]:
+            if prediction!=rddEntry[1][1][0][idx]:
                 numFalseAlarms+=1
     return (numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords)
 
@@ -54,8 +56,7 @@ if __name__ == "__main__":
     # model partition as time series and compute rate of change of attributes.
     # drivedatadf = sparksql.read.csv('/user/zixian/project/input/*.csv', inferSchema = True, header = True)
     drivedatadf = sparksql.read.csv('hdfs://ec2-34-204-54-226.compute-1.amazonaws.com:9000/data/*.csv', inferSchema = True, header = True)
-    drivedatadf = drivedatadf.select(desiredcolumns).fillna(0)
-    # drivedatadf = drivedatadf.repartition('serial_number', 'model')
+    drivedatadf = drivedatadf.select(desiredcolumns)
     drivedatadf.cache()
 
     # Get list of distinct drives
@@ -129,14 +130,14 @@ if __name__ == "__main__":
     # Output format: (key, [[[training_labels], [[features]]], [[expected_labels], [[features]]]])
     modellingrdd = trainingrdd.union(testrdd).groupByKey().mapValues(list)
 
+    # Done preprocessing all records. Proceed to free up memory.
+    drivedatadf.unpersist()
+
     # Run SVM per key
     predictionStats = modellingrdd.map(getPredictionStats).reduce(lambda a, b: (a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3]))
-    predictionRate = predictionStats[0]*100.0/predictionStats[1]
-    falseAlarmRate = predictionStats[2]*100.0/predictionStats[3]
+    predictionRate = predictionStats[0]*100.0/predictionStats[1] if predictionStats[1]!=0 else 0
+    falseAlarmRate = predictionStats[2]*100.0/predictionStats[3] if predictionStats[3]!=0 else 0
 
     # Print prediction rate and false alarm rate
     print 'Prediction Rate: ', str(predictionRate)+'%'
     print 'False Alarm Rate: ', str(falseAlarmRate)+'%'
-
-    # Done preprocessing all records. Proceed to free up memory.
-    drivedatadf.unpersist()
