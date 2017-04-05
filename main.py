@@ -27,7 +27,7 @@ def getPredictionStats(rddEntry):
     model = svm_train(rddEntry[1][0][0], rddEntry[1][0][1], svm_options)
     labels, acc, values = svm_predict(rddEntry[1][1][0], rddEntry[1][1][1], model)
     numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords = 0, 0, 0, 0
-    for idx prediction in enumerate(labels):
+    for idx, prediction in enumerate(labels):
         if rddEntry[1][1][0][idx]==1:
             expectedFailedPredictions+=1
             if labels[idx]==rddEntry[1][1][0][idx]:
@@ -53,7 +53,8 @@ if __name__ == "__main__":
     # Load the entire data and project wanted columns
     # Then parition by individual hard disk and sort by date so we can
     # model partition as time series and compute rate of change of attributes.
-    drivedatadf = sparksql.read.csv('/user/zixian/project/input/*.csv', inferSchema = True, header = True)
+    # drivedatadf = sparksql.read.csv('/user/zixian/project/input/*.csv', inferSchema = True, header = True)
+    drivedatadf = sparksql.read.csv('/data/*.csv', inferSchema = True, header = True)
     drivedatadf = drivedatadf.select(desiredcolumns).fillna(0)
     # drivedatadf = drivedatadf.repartition('serial_number', 'model')
     drivedatadf.cache()
@@ -77,73 +78,67 @@ if __name__ == "__main__":
     traingoodset = sparkcontext.broadcast(set(traingooddf.rdd.map(lambda r: (r.serial_number, r.model)).collect()))
     testgoodset = sparkcontext.broadcast(set(testgooddf.rdd.map(lambda r: (r.serial_number, r.model)).collect()))
 
-    # Compute rate of change of raw values of the 2 smart values(how?)
-    # Leaving this out for now. Prioritizing whole flow of SVM
-
     # Data extractions and transformations begin here!
-    # Get records for good training drives
+    # Get records for good training drives. Output format: Row.
     traingoodrdd = drivedatadf.rdd.filter(lambda r: (r.serial_number, r.model) in traingoodset.value)
     # Keyed by drive identifier
     traingoodrdd = traingoodrdd.map(lambda r: ((r.serial_number, r.model), r)).groupByKey().mapValues(list)
     # Pick 4 sample records per good drive for training. Output format: Row
     traingoodrdd = traingoodrdd.flatMap(lambda r: sampleK(r[1], 4))
-    # Convert to (model, [0, features])
+    # Convert to (model, [0, features]). Change the key as needed.
     traingoodrdd = traingoodrdd.map(lambda r: (r.model, [0]+map(lambda col: r[col], desiredcolumns[4:])))
 
-    # Get records for failed training drives
+    # Get records for failed training drives. Output format: Row.
     trainfailedrdd = drivedatadf.rdd.filter(lambda r: (r.serial_number, r.model) in trainfailedset.value)
     # Outputformat: ((sn, model), Row)
     trainfailedrdd = trainfailedrdd.map(lambda r: ((r.serial_number, r.model), r)).groupByKey().mapValues(list)
     # Sort all records by record's date and extract last 10 days of operations. Output format: Row
     trainfailedrdd = trainfailedrdd.flatMap(lambda r: sorted(r[1], None, lambda p: p.date, True)[:10])
-    # Output format: (model, [1, features])
+    # Output format: (key, [1, features]). Change the key as needed.
     trainfailedrdd = trainfailedrdd.map(lambda r: (r.model, [1]+map(lambda col: r[col], desiredcolumns[4:])))
 
-    # Combine the training data sets
-    # Output format: (model, [[0 or 1, features]])
+    # Combine the training data sets. This part should not need any changes.
+    # Output format: (key, [[0 or 1, features]])
     trainingrdd = traingoodrdd.union(trainfailedrdd).groupByKey().mapValues(list)
+    # Output format: (key, [[training_labels], [[features]]])
+    trainingrdd = trainingrdd.map(lambda r: (r[0], [map(lambda x: x[0], r[1]), map(lambda x: x[1:], r[1])]))
 
-    # Get records for good test drives
-    # testgoodrdd = drivedatadf.rdd.filter(lambda r: (r.serial_number, r.model) in testgoodset.value)
-    # Convert records to data for SVM
-    # testgoodrdd = testgoodrdd.map(lambda r: map(lambda col: r[col], desiredcolumns[4:]), True)
-    # testgoodrdd.cache()
-    # testgoodrdd.repartition(1).saveAsTextFile('/user/zixian/project/test-good-data')
+    # Get records for good test drives. Output format: Row.
+    testgoodrdd = drivedatadf.rdd.filter(lambda r: (r.serial_number, r.model) in testgoodset.value)
+    # Any further processing if needed
+    # Output format: (key, [0, features]). Change the key as you need.
+    testgoodrdd = testgoodrdd.map(lambda r: (r.model, [0]+map(lambda col: r[col], desiredcolumns[4:])))
 
-    # Get records for failed test drives
-    # testfailedrdd = drivedatadf.rdd.filter(lambda r: (r.serial_number, r.model) in testfailedset.value)
-    # Keyed by drive identifier and groups records by drive identifier
-    # testfailedrdd = testfailedrdd.map(lambda r: ((r.serial_number, r.model), r)).groupByKey().mapValues(list)
-    # Sort all records by record's date and extract last 10 days of operations
-    # testfailedrdd = testfailedrdd.flatMap(lambda r: sorted(r[1], None, lambda p: p.date, True)[:10])
-    # Convert records to data for SVM
-    # testfailedrdd = testfailedrdd.map(lambda r: map(lambda col: r[col], desiredcolumns[4:]), True)
-    # testfailedrdd.cache()
-    # testrdd = testgoodrdd.union(testfailedrdd)
-    # testfailedrdd.repartition(1).saveAsTextFile('/user/zixian/project/test-failed-data')
+    # Get records for failed test drives.
+    testfailedrdd = drivedatadf.rdd.filter(lambda r: (r.serial_number, r.model) in testfailedset.value)
+    # Extract last 10 days of records. Output format: ((sn, model), Row). Add futher processing as needed.
+    testfailedrdd = testfailedrdd.map(lambda r: ((r.serial_number, r.model), r)).groupByKey().mapValues(list)
+    # Sort all records by record's date and extract last 10 days of operations. Output format: Row
+    testfailedrdd = testfailedrdd.flatMap(lambda r: sorted(r[1], None, lambda p: p.date, True)[:10])
+    # Output format: (key, [1, features]). Change the key as you need.
+    testfailedrdd = testfailedrdd.map(lambda r: (r.model, [1]+map(lambda col: r[col], desiredcolumns[4:])))
+    # End of modifiable transformations
+
+    # Combine test data sets. Should not need any changes.
+    # Output format: (key, [0 or 1, features])
+    testrdd = testgoodrdd.union(testfailedrdd).groupByKey().mapValues(list)
+    # Output format: (key, [[expected_labels], [[features]]])
+    testrdd = testrdd.map(lambda r: (r[0], [map(lambda x: x[0], r[1]), map(lambda x: x[1:], r[1])]))
+
+    # Combine training and test data set. union and groupByKeys seem to preserve ordering of values on collect().
+    # This part shouldn't need any change.
+    # Output format: (key, [[[training_labels], [[features]]], [[expected_labels], [[features]]]])
+    modellingrdd = trainingrdd.union(testrdd).groupByKey().mapValues(list)
+    # modellingrdd.repartition(1).saveAsTextFile('/user/zixian/project/modelling-rdd')
+
+    # Run SVM per key
+    predictionStats = modellingrdd.map(getPredictionStats).reduce(lambda a, b: (a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3]))
+    predictionRate = predictionStats[0]*100.0/predictionStats[1]
+    falseAlarmRate = predictionStats[2]*100.0/predictionStats[3]
+
+    # Print prediction rate and false alarm rate
+    print 'Prediction Rate: ', str(predictionRate)+'%'
+    print 'False Alarm Rate: ', str(falseAlarmRate)+'%'
 
     # Done preprocessing all records. Proceed to free up memory.
     drivedatadf.unpersist()
-
-    # Train the SVM model
-    # svm = SVMWithSGD.train(trainingrdd)
-    # svm.setThreshold(0.5)
-
-    # Run predictions
-    # mocktestrdd = trainfailedrdd.map(lambda lp: lp.features)
-    # trainfailedrdd.unpersist()
-    # mocktestrdd.cache()
-    # mocktestrdd.repartition(1).saveAsTextFile('/user/zixian/project/mock-test-failed-data')
-    # svm.predict(mocktestrdd).repartition(1).saveAsTextFile('/user/zixian/project/failed-drive-prediction')
-    # mocktestrdd.unpersist()
-    # predictedFailures = svm.predict(testfailedrdd).reduce(lambda a, b: a+b)
-    # actualFailures = testfailedrdd.count()
-    # predictionRate = predictedFailures*100.0/actualFailures
-    # testfailedrdd.unpersist()
-
-    # predictedFailures = svm.predict(testgoodrdd).filter(lambda x: x==0).count()
-    # falseAlarmRate = predictedFailures*100.0/testgoodrdd.count()
-    # testgoodrdd.unpersist()
-
-    # print 'Prediction Rate: ', str(predictionRate)+'%'
-    # print 'False Alarm Rate: ', str(falseAlarmRate)+'%'
