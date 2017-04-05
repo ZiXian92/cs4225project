@@ -4,6 +4,50 @@ from pyspark.sql import SparkSession
 from datetime import date
 import random
 
+# convert model(3rd column of csv file) into model enum
+def convertModel(model):
+    if model[:2] == 'Hi' or model[:4] == 'HGST':
+        # hitachi
+        return 0
+    elif model[:2] == 'ST':
+        # seagate
+        return 1
+    elif model[:3] == 'WDC':
+        # western digital
+        return 2
+    elif model[:7] == 'TOSHIBA':
+        # toshiba
+        return 3
+    else:
+        raise Exception()
+
+# convert byte size(4th column of csv file) into size enum
+def convertSize(size):
+    if size < 1.7 * 10**11:
+        return 0
+    elif size < 2.6 * 10**11:
+        return 1
+    elif size < 3.3 * 10**11:
+        return 2
+    elif size < 5.1 * 10**11:
+        return 3
+    elif size < 1.6 * 10**12:
+        return 4
+    elif size < 2.1 * 10**12:
+        return 5
+    elif size < 3.1 * 10**12:
+        return 6
+    elif size < 4.1 * 10**12:
+        return 7
+    elif size < 5.1 * 10**12:
+        return 8
+    elif size < 6.1 * 10**12:
+        return 9
+    elif size < 8.1 * 10**12:
+        return 10
+    else:
+        raise Exception()
+
 # Defines reservoir sampling to get k items out of the given item list
 def sampleK(itemList, k):
     sampleList = []
