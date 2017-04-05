@@ -1,8 +1,8 @@
 from svmutil import svm_train, svm_predict
 from pyspark import SparkContext, SparkConf
 from pyspark.sql import SparkSession
-from pyspark.mllib.classification import SVMWithSGD
-from pyspark.mllib.regression import LabeledPoint
+# from pyspark.mllib.classification import SVMWithSGD
+# from pyspark.mllib.regression import LabeledPoint
 from datetime import date
 import random
 
