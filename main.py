@@ -46,13 +46,14 @@ for sno in desiredsmartnos:
 if __name__ == "__main__":
     sparkconf = SparkConf().setAppName('hddpredict')
     sparkcontext = SparkContext(conf=sparkconf)
+    sparkcontext.addFile('hdfs://ec2-34-204-54-226.compute-1.amazonaws.com:9000/libsvm-322', True)
     sparksql = SparkSession.builder.master('local').appName('hddpredict').getOrCreate()
 
     # Load the entire data and project wanted columns
     # Then parition by individual hard disk and sort by date so we can
     # model partition as time series and compute rate of change of attributes.
     # drivedatadf = sparksql.read.csv('/user/zixian/project/input/*.csv', inferSchema = True, header = True)
-    drivedatadf = sparksql.read.csv('/data/*.csv', inferSchema = True, header = True)
+    drivedatadf = sparksql.read.csv('hdfs://ec2-34-204-54-226.compute-1.amazonaws.com:9000/data/*.csv', inferSchema = True, header = True)
     drivedatadf = drivedatadf.select(desiredcolumns).fillna(0)
     # drivedatadf = drivedatadf.repartition('serial_number', 'model')
     drivedatadf.cache()
