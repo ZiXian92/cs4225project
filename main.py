@@ -1,8 +1,6 @@
 from svmutil import svm_train, svm_predict
 from pyspark import SparkContext, SparkConf
 from pyspark.sql import SparkSession
-# from pyspark.mllib.classification import SVMWithSGD
-# from pyspark.mllib.regression import LabeledPoint
 from datetime import date
 import random
 
@@ -129,7 +127,6 @@ if __name__ == "__main__":
     # This part shouldn't need any change.
     # Output format: (key, [[[training_labels], [[features]]], [[expected_labels], [[features]]]])
     modellingrdd = trainingrdd.union(testrdd).groupByKey().mapValues(list)
-    # modellingrdd.repartition(1).saveAsTextFile('/user/zixian/project/modelling-rdd')
 
     # Run SVM per key
     predictionStats = modellingrdd.map(getPredictionStats).reduce(lambda a, b: (a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3]))
