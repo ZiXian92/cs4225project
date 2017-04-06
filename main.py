@@ -39,7 +39,7 @@ def getPredictionStats(rddEntry):
     return (numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords)
 
 # Prepare desired columns
-desiredsmartnos = [1, 3, 5, 7, 9, 187, 189, 194, 195, 197]
+desiredsmartnos = [1, 3, 5, 7, 9, 194, 197]
 desiredcolumns = ['date', 'serial_number', 'model', 'failure']
 for sno in desiredsmartnos:
     desiredcolumns.append('smart_'+str(sno)+'_normalized')
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     # model partition as time series and compute rate of change of attributes.
     # drivedatadf = sparksql.read.csv('/user/zixian/project/input/*.csv', inferSchema = True, header = True)
     drivedatadf = sparksql.read.csv('hdfs://ec2-34-204-54-226.compute-1.amazonaws.com:9000/data/*.csv', inferSchema = True, header = True)
-    drivedatadf = drivedatadf.select(desiredcolumns)
+    drivedatadf = drivedatadf.select(desiredcolumns).fillna(0)
     drivedatadf.cache()
 
     # Get list of distinct drives
@@ -135,9 +135,13 @@ if __name__ == "__main__":
 
     # Run SVM per key
     predictionStats = modellingrdd.map(getPredictionStats).reduce(lambda a, b: (a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3]))
-    predictionRate = predictionStats[0]*100.0/predictionStats[1] if predictionStats[1]!=0 else 0
-    falseAlarmRate = predictionStats[2]*100.0/predictionStats[3] if predictionStats[3]!=0 else 0
-
-    # Print prediction rate and false alarm rate
-    print 'Prediction Rate: ', str(predictionRate)+'%'
-    print 'False Alarm Rate: ', str(falseAlarmRate)+'%'
+    print predictionStats
+    # print 'Predicted RDD'
+    # Outputs [(0, 0, 0, 21)], which is of correct format
+    # print modellingrdd.map(getPredictionStats).take(1)
+    # predictionRate = predictionStats[0]*100.0/predictionStats[1] if predictionStats[1]!=0 else 0
+    # falseAlarmRate = predictionStats[2]*100.0/predictionStats[3] if predictionStats[3]!=0 else 0
+    #
+    # # Print prediction rate and false alarm rate
+    # print 'Prediction Rate: ', str(predictionRate)+'%'
+    # print 'False Alarm Rate: ', str(falseAlarmRate)+'%'
