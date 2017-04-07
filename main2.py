@@ -35,12 +35,21 @@ def sampleK(itemList, k):
 
 # rddEntry format: [features]
 # Output format: (numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords)
-def getPredictionStats(rddEntry, trainingdata, expectedLabel):
+def getPredictionStats(rddEntries, trainingdata, expectedLabel):
+    output = [0, 0, 0, 0]
     # Options to be passed to SVM for training
     svm_options = '-s 0 -t 2 -c 10'
+    # Train SVM model once per partition
     model = svm_train(trainingdata[0], trainingdata[1], svm_options)
-    labels, acc, values = svm_predict([expectedLabel], [rddEntry], model)
-    return (labels[0] if expectedLabel==1 else 0, expectedLabel, 0 if expectedLabel==1 else labels[0], 1-expectedLabel)
+    for entry in rddEntries:
+        labels, acc, values = svm_predict([expectedLabel], [entry], model)
+        if expectedLabel==1:
+            output[0]+=labels[0]
+            output[1]+=1
+        else:
+            output[2]+=labels[0]
+            output[3]+=1
+    return [(output[0], output[1], output[2], output[3])]
 
 if __name__ == "__main__":
     sparkconf = SparkConf().setAppName('hddpredict')
@@ -51,7 +60,7 @@ if __name__ == "__main__":
     # Load the entire data and project wanted columns
     # Then, compute rate of change for remaining smart attributes
     # drivedatadf = sparksql.read.csv('/user/zixian/project/input/*.csv', inferSchema = True, header = True)
-    drivedatadf = sparksql.read.csv('hdfs://ec2-34-204-54-226.compute-1.amazonaws.com:9000/data/2016-10-*.csv', inferSchema = True, header = True)
+    drivedatadf = sparksql.read.csv('hdfs://ec2-34-204-54-226.compute-1.amazonaws.com:9000/data/2016-11-*.csv', inferSchema = True, header = True)
     drivedatadf = drivedatadf.select(desiredcolumns[:4+2*len(desiredsmartnos)]).fillna(0)
     drivedatardd = drivedatadf.rdd.map(lambda r: r.asDict())
     # Output format: [(key, [records])]
@@ -62,13 +71,16 @@ if __name__ == "__main__":
     drivedatadf.cache()
 
     # Set of dates to iterate over
-    datesset = set(drivedatadf.select('date').distinct().rdd.map(lambda r: r.date).collect())
+    datesset = drivedatadf.filter(drivedatadf.failure==1).select('date').take(5)
+    datesset = [datesset[len(datesset)/2].date]
+    # datesset = set(drivedatadf.select('date').distinct().rdd.map(lambda r: r.date).collect())
 
     numDaysWindow = 10
     daysDifference = timedelta(10)
     combinePredictionStats = (lambda a, b: (a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3]))
 
-    for day in sorted(datesset)[15:16]:
+    # for day in sorted(datesset)[15:16]:
+    for day in datesset:
         # Check if we have training data and can get expected labels. If not, skip prediction for this day.
         # Get the records in the past time window, excluding today as training set
         trainningrecordsdf = drivedatadf.filter((drivedatadf.date<day) & (drivedatadf.date>=day-daysDifference))
@@ -97,17 +109,19 @@ if __name__ == "__main__":
         trainingfailedrecordsrdd = trainningrecordsdf.rdd.filter(lambda r: (r.serial_number, r.model) in trainingfaileddriveset.value)
         trainningrecordsdf.unpersist()
         # Tune these sampling ratios to tweak between prediction rate ad false alarm rates
-        traininggoodrecordsrdd = traininggoodrecordsrdd.sample(False, 0.005)
-        trainingfailedrecordsrdd = trainingfailedrecordsrdd.sample(False, 0.75)
+        # numGoodSample = traininggoodrecordsrdd.countApprox()
+        traininggoodrecordsrdd = traininggoodrecordsrdd.sample(False, 0.0001)
+        trainingfailedrecordsrdd = trainingfailedrecordsrdd.sample(False, 1.0)
         traininggoodrecordsrdd.cache()
         trainingfailedrecordsrdd.cache()
+        numGoodSamples = traininggoodrecordsrdd.count()
+        numFailedSamples = trainingfailedrecordsrdd.count()
         traininglabels = traininggoodrecordsrdd.map(lambda r: 0).collect()+trainingfailedrecordsrdd.map(lambda r: 1).collect()
         trainingdata = traininggoodrecordsrdd.map(lambda r: map(lambda col: r[col], desiredcolumns[4:])).collect()
         trainingdata+=trainingfailedrecordsrdd.map(lambda r: map(lambda col: r[col], desiredcolumns[4:])).collect()
         traininggoodrecordsrdd.unpersist()
         trainingfailedrecordsrdd.unpersist()
         trainingdata = [traininglabels, trainingdata]
-        trainingdata = sparkcontext.broadcast(trainingdata)
 
         # Prepare future data to facilitate finding expected labels
         verificationdrivesdf = verificationrecordsdf.groupBy('serial_number', 'model').agg({'failure': 'max'}).withColumnRenamed('max(failure)', 'failure')
@@ -120,6 +134,7 @@ if __name__ == "__main__":
 
         # Get today's drive records and process into SVM data
         todayrecordssdf = drivedatadf.filter(drivedatadf.date==day)
+        drivedatadf.unpersist()
         todayrecordssdf.cache()
         todaygoodrecordsrdd = todayrecordssdf.rdd.filter(lambda r: (r.serial_number, r.model) in testgooddriveset.value)
         todayfailedrecordsrdd = todayrecordssdf.rdd.filter(lambda r: (r.serial_number, r.model) in testfaileddriveset.value)
@@ -129,11 +144,14 @@ if __name__ == "__main__":
         todayfailedrdd = todayfailedrecordsrdd.map(lambda r: map(lambda col: r[col], desiredcolumns[4:]))
 
         # Run predictions
-        goodpredictrdd = todaygoodrdd.map(lambda r: getPredictionStats(r, trainingdata.value, 0))
-        failedpredictrdd = todayfailedrdd.map(lambda r: getPredictionStats(r, trainingdata.value, 1))
+        trainingdata = sparkcontext.broadcast(trainingdata)
+        goodpredictrdd = todaygoodrdd.mapPartitions(lambda records: getPredictionStats(records, trainingdata.value, 0))
+        failedpredictrdd = todayfailedrdd.mapPartitions(lambda records: getPredictionStats(records, trainingdata.value, 1))
         predictionStats = goodpredictrdd.aggregate((0, 0, 0, 0), combinePredictionStats, combinePredictionStats)
         predictionStats = combinePredictionStats(predictionStats, failedpredictrdd.aggregate((0, 0, 0, 0), combinePredictionStats, combinePredictionStats))
+        print 'Predictions for', day
+        print 'Samples:', numGoodSamples, ',', numFailedSamples
         print predictionStats
 
     # Clean up at the end
-    drivedatadf.unpersist()
+    # drivedatadf.unpersist()
