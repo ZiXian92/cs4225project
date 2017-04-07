@@ -61,7 +61,7 @@ if __name__ == "__main__":
     # Load the entire data and project wanted columns
     # Then, compute rate of change for remaining smart attributes
     # drivedatadf = sparksql.read.csv('/user/zixian/project/input/*.csv', inferSchema = True, header = True)
-    drivedatadf = sparksql.read.csv('hdfs://ec2-34-204-54-226.compute-1.amazonaws.com:9000/data/2016-11-*.csv', inferSchema = True, header = True)
+    drivedatadf = sparksql.read.csv('hdfs://ec2-34-204-54-226.compute-1.amazonaws.com:9000/data/*.csv', inferSchema = True, header = True)
     drivedatadf = drivedatadf.select(desiredcolumns[:4+2*len(desiredsmartnos)]).fillna(0)
     drivedatardd = drivedatadf.rdd.map(lambda r: r.asDict())
     # Output format: [(key, [records])]
@@ -149,10 +149,11 @@ if __name__ == "__main__":
         failedpredictrdd = todayfailedrdd.mapPartitions(lambda records: getPredictionStats(records, trainingdata.value, 1))
         predictionStats = goodpredictrdd.aggregate((0, 0, 0, 0), combinePredictionStats, combinePredictionStats)
         predictionStats = combinePredictionStats(predictionStats, failedpredictrdd.aggregate((0, 0, 0, 0), combinePredictionStats, combinePredictionStats))
-        print 'Predictions for', day
-        print 'Samples:', numGoodSamples, ',', numFailedSamples
-        print predictionStats
-        # outputfile.write(str(day)+','+str(predictionStats[0])+','+str(predictionStats[1])+','+str(predictionStats[2])+','+str(predictionStats[3])+'\n')
+        # print 'Predictions for', day
+        # print 'Samples:', numGoodSamples, ',', numFailedSamples
+        # print predictionStats
+        outputfile.write(str(day)+','+str(predictionStats[0])+','+str(predictionStats[1])+','+str(predictionStats[2])+','+str(predictionStats[3])+'\n')
+	outputfile.flush()
 
     # Clean up at the end
     drivedatadf.unpersist()
