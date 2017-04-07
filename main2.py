@@ -1,6 +1,7 @@
 from svmutil import svm_train, svm_predict
 from pyspark import SparkContext, SparkConf
 from pyspark.sql import SparkSession
+from pyspark.mllib.clustering import KMeans, KMeansModel
 from datetime import date, datetime, timedelta
 import random
 
@@ -71,13 +72,15 @@ if __name__ == "__main__":
     drivedatadf.cache()
 
     # Set of dates to iterate over
-    datesset = drivedatadf.filter(drivedatadf.failure==1).select('date').take(5)
-    datesset = [datesset[len(datesset)/2].date]
-    # datesset = set(drivedatadf.select('date').distinct().rdd.map(lambda r: r.date).collect())
+    # datesset = drivedatadf.filter(drivedatadf.failure==1).select('date').take(5)
+    # datesset = [datesset[len(datesset)/2].date]
+    datesset = sorted(drivedatadf.select('date').distinct().rdd.map(lambda r: r.date).collect())
 
     numDaysWindow = 10
     daysDifference = timedelta(10)
     combinePredictionStats = (lambda a, b: (a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3]))
+
+    outputfile = open('predictions.csv', 'w')
 
     # for day in sorted(datesset)[15:16]:
     for day in datesset:
@@ -109,18 +112,15 @@ if __name__ == "__main__":
         trainingfailedrecordsrdd = trainningrecordsdf.rdd.filter(lambda r: (r.serial_number, r.model) in trainingfaileddriveset.value)
         trainningrecordsdf.unpersist()
         # Tune these sampling ratios to tweak between prediction rate ad false alarm rates
-        # numGoodSample = traininggoodrecordsrdd.countApprox()
-        traininggoodrecordsrdd = traininggoodrecordsrdd.sample(False, 0.0001)
-        trainingfailedrecordsrdd = trainingfailedrecordsrdd.sample(False, 1.0)
-        traininggoodrecordsrdd.cache()
-        trainingfailedrecordsrdd.cache()
-        numGoodSamples = traininggoodrecordsrdd.count()
-        numFailedSamples = trainingfailedrecordsrdd.count()
-        traininglabels = traininggoodrecordsrdd.map(lambda r: 0).collect()+trainingfailedrecordsrdd.map(lambda r: 1).collect()
-        trainingdata = traininggoodrecordsrdd.map(lambda r: map(lambda col: r[col], desiredcolumns[4:])).collect()
-        trainingdata+=trainingfailedrecordsrdd.map(lambda r: map(lambda col: r[col], desiredcolumns[4:])).collect()
-        traininggoodrecordsrdd.unpersist()
-        trainingfailedrecordsrdd.unpersist()
+        trainingfailedsamplesrdd = trainingfailedrecordsrdd.sample(False, 1.0)
+        trainingfailedsamplesrdd.cache()
+        numFailedSamples = trainingfailedsamplesrdd.count()
+        clusteringModel = KMeans.train(traininggoodrecordsrdd.map(lambda r: map(lambda col: r[col], desiredcolumns[4:])), numFailedSamples)
+        traininggoodsamples = map(lambda s: s.tolist(), clusteringModel.clusterCenters)
+        numGoodSamples = len(traininggoodsamples)
+        traininglabels = map(lambda s: 0, traininggoodsamples)+trainingfailedsamplesrdd.map(lambda r: 1).collect()
+        trainingdata = traininggoodsamples+trainingfailedsamplesrdd.map(lambda r: map(lambda col: r[col], desiredcolumns[4:])).collect()
+        trainingfailedsamplesrdd.unpersist()
         trainingdata = [traininglabels, trainingdata]
 
         # Prepare future data to facilitate finding expected labels
@@ -134,7 +134,7 @@ if __name__ == "__main__":
 
         # Get today's drive records and process into SVM data
         todayrecordssdf = drivedatadf.filter(drivedatadf.date==day)
-        drivedatadf.unpersist()
+        # drivedatadf.unpersist()
         todayrecordssdf.cache()
         todaygoodrecordsrdd = todayrecordssdf.rdd.filter(lambda r: (r.serial_number, r.model) in testgooddriveset.value)
         todayfailedrecordsrdd = todayrecordssdf.rdd.filter(lambda r: (r.serial_number, r.model) in testfaileddriveset.value)
@@ -152,6 +152,8 @@ if __name__ == "__main__":
         print 'Predictions for', day
         print 'Samples:', numGoodSamples, ',', numFailedSamples
         print predictionStats
+        # outputfile.write(str(day)+','+str(predictionStats[0])+','+str(predictionStats[1])+','+str(predictionStats[2])+','+str(predictionStats[3])+'\n')
 
     # Clean up at the end
-    # drivedatadf.unpersist()
+    drivedatadf.unpersist()
+    outputfile.close()
