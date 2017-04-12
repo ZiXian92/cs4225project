@@ -68,6 +68,11 @@ def sampleK(itemList, k):
                 sampleList[token] = item
     return sampleList
 
+def normalise(lst):
+    for index, sample in enumerate(lst):
+        for i, smart in enumerate(sample):
+            lst[index][i] = (2.0 * (smart - minimal[i]) / (maximal[i]) - minimal[i]) - 1.0
+
 # rddEntry format: (key, [[[training_labels], [training_data]], [[expected_labels], [test_data]]])
 # Output format: (numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords)
 def getPredictionStats(rddEntry, logger = LOGGER):
@@ -76,6 +81,8 @@ def getPredictionStats(rddEntry, logger = LOGGER):
 
     # Options to be passed to SVM for training
     svm_options = '-s 0 -t 2 -c 10'
+    normalise(rddEntry[1][0][1])
+    normalise(rddEntry[1][1][1])
     model = svm_train(rddEntry[1][0][0], rddEntry[1][0][1], svm_options)
     labels, acc, values = svm_predict(rddEntry[1][1][0], rddEntry[1][1][1], model)
     numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords = 0, 0, 0, 0
