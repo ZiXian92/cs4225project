@@ -5,6 +5,8 @@ from datetime import date
 import random
 
 LOGGER = None
+MINIMAL =[0.0, 0.0, 0.0, 0.0, 5.0, 11.0, 0.0]
+MAXIMAL =[2011576436.0, 9741.0, 65248.0, 281471514165608.0, 65389.0, 52.0, 18752.0]
 
 # convert model(3rd column of csv file) into model enum
 def convertModel(model):
@@ -66,15 +68,6 @@ def sampleK(itemList, k):
                 sampleList[token] = item
     return sampleList
 
-counter = 0
-def test(a, b):
-    print(counter)
-    global counter
-    counter += 1
-    print(a)
-    print(b)
-    return (a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3])
-
 # rddEntry format: (key, [[[training_labels], [training_data]], [[expected_labels], [test_data]]])
 # Output format: (numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords)
 def getPredictionStats(rddEntry, logger = LOGGER):
@@ -96,11 +89,6 @@ def getPredictionStats(rddEntry, logger = LOGGER):
             if prediction!=rddEntry[1][1][0][idx]:
                 numFalseAlarms+=1
     return (numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords)
-
-def temp(a, b):
-    print('a:' + str(a))
-    print('b:' + str(b))
-    return (a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3])
 
 # Prepare desired columns
 desiredsmartnos = [1, 3, 5, 7, 9, 194, 197]
@@ -206,7 +194,8 @@ if __name__ == "__main__":
     drivedatadf.unpersist()
 
     # Run SVM per key
-    predictionStats = modellingrdd.map(getPredictionStats).reduce(test)
+    predictionStats = modellingrdd.map(getPredictionStats).reduce(lambda a, b: (a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3]))
+
     print predictionStats
     # print 'Predicted RDD'
     # Outputs [(0, 0, 0, 21)], which is of correct format
