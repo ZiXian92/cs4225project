@@ -6,33 +6,18 @@ from datetime import date, datetime, timedelta
 import random
 
 # Prepare desired columns
-desiredsmartnos = [1, 3, 5, 7, 9, 194, 197]
-desiredcolumns = ['date', 'serial_number', 'model', 'failure']
-for sno in desiredsmartnos:
-    desiredcolumns.append('smart_'+str(sno)+'_normalized')
-    desiredcolumns.append('smart_'+str(sno)+'_raw')
-for feature in desiredcolumns[4:4+2*len(desiredsmartnos)]:
+desiredsmartnos = ['smart_1_normalized', 'smart_5_raw', 'smart_187_normalized', 'smart_188_raw', 'smart_197_normalized', 'smart_198_raw']
+desiredcolumns = ['date', 'serial_number', 'model', 'failure']+desiredsmartnos
+for feature in desiredsmartnos:
     desiredcolumns.append('del_'+feature)
 
 # Computes rate of change of smart values
 # Input is a list of dictionaries
 def computeChangeRates(records):
     for idx, record in enumerate(records):
-        for col in desiredcolumns[4:4+2*len(desiredsmartnos)]:
+        for col in desiredcolumns[4:4+len(desiredsmartnos)]:
             records[idx]['del_'+col] = 0 if idx==0 else records[idx][col]-records[idx-1][col]
     return records
-
-# Defines reservoir sampling to get k items out of the given item list
-def sampleK(itemList, k):
-    sampleList = []
-    for idx, item in enumerate(itemList, start=1):
-        if idx <= k:
-            sampleList.append(item)
-        else:
-            token = random.randint(0, idx-1)
-            if token < k:
-                sampleList[token] = item
-    return sampleList
 
 # rddEntry format: [features]
 # Output format: (numFailedPredictions, expectedFailedPredictions, numFalseAlarms, numGoodRecords)
@@ -55,15 +40,15 @@ def getPredictionStats(rddEntries, trainingdata, expectedLabel):
 if __name__ == "__main__":
     sparkconf = SparkConf().setAppName('hddpredict')
     sparkcontext = SparkContext(conf=sparkconf)
-    sparkcontext.addFile('hdfs://ec2-34-204-54-226.compute-1.amazonaws.com:9000/libsvm-322', True)
     sparksql = SparkSession.builder.master('local').appName('hddpredict').getOrCreate()
 
     # Load the entire data and project wanted columns
     # Then, compute rate of change for remaining smart attributes
-    # drivedatadf = sparksql.read.csv('/user/zixian/project/input/*.csv', inferSchema = True, header = True)
-    drivedatadf = sparksql.read.csv('hdfs://ec2-34-204-54-226.compute-1.amazonaws.com:9000/data/*.csv', inferSchema = True, header = True)
-    drivedatadf = drivedatadf.select(desiredcolumns[:4+2*len(desiredsmartnos)]).fillna(0)
+    drivedatadf = sparksql.read.csv('hdfs://spark-master:9000/user/zixian/project/input/*.csv', inferSchema = True, header = True)
+    drivedatadf = drivedatadf.select(desiredcolumns[:4+len(desiredsmartnos)]).fillna(0)
     drivedatardd = drivedatadf.rdd.map(lambda r: r.asDict())
+
+    # Compute rate of change for each smart attribute
     # Output format: [(key, [records])]
     drivedatardd = drivedatardd.map(lambda r: ((r['model'], r['serial_number']), r)).groupByKey().mapValues(list)
     drivedatardd = drivedatardd.map(lambda r: (r[0], sorted(r[1], None, lambda x: x['date'])))
@@ -72,17 +57,14 @@ if __name__ == "__main__":
     drivedatadf.cache()
 
     # Set of dates to iterate over
-    # datesset = drivedatadf.filter(drivedatadf.failure==1).select('date').take(5)
-    # datesset = [datesset[len(datesset)/2].date]
     datesset = sorted(drivedatadf.select('date').distinct().rdd.map(lambda r: r.date).collect())
 
-    numDaysWindow = 10
-    daysDifference = timedelta(10)
+    numDaysWindow = 7
+    daysDifference = timedelta(numDaysWindow)
     combinePredictionStats = (lambda a, b: (a[0]+b[0], a[1]+b[1], a[2]+b[2], a[3]+b[3]))
 
     outputfile = open('predictions.csv', 'w')
 
-    # for day in sorted(datesset)[15:16]:
     for day in datesset:
         # Check if we have training data and can get expected labels. If not, skip prediction for this day.
         # Get the records in the past time window, excluding today as training set
@@ -134,7 +116,6 @@ if __name__ == "__main__":
 
         # Get today's drive records and process into SVM data
         todayrecordssdf = drivedatadf.filter(drivedatadf.date==day)
-        # drivedatadf.unpersist()
         todayrecordssdf.cache()
         todaygoodrecordsrdd = todayrecordssdf.rdd.filter(lambda r: (r.serial_number, r.model) in testgooddriveset.value)
         todayfailedrecordsrdd = todayrecordssdf.rdd.filter(lambda r: (r.serial_number, r.model) in testfaileddriveset.value)
@@ -149,11 +130,11 @@ if __name__ == "__main__":
         failedpredictrdd = todayfailedrdd.mapPartitions(lambda records: getPredictionStats(records, trainingdata.value, 1))
         predictionStats = goodpredictrdd.aggregate((0, 0, 0, 0), combinePredictionStats, combinePredictionStats)
         predictionStats = combinePredictionStats(predictionStats, failedpredictrdd.aggregate((0, 0, 0, 0), combinePredictionStats, combinePredictionStats))
-        # print 'Predictions for', day
-        # print 'Samples:', numGoodSamples, ',', numFailedSamples
-        # print predictionStats
+        print 'Predictions for', day
+        print 'Samples:', numGoodSamples, ',', numFailedSamples
+        print predictionStats
         outputfile.write(str(day)+','+str(predictionStats[0])+','+str(predictionStats[1])+','+str(predictionStats[2])+','+str(predictionStats[3])+'\n')
-	outputfile.flush()
+	    outputfile.flush()
 
     # Clean up at the end
     drivedatadf.unpersist()
